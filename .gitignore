@@ -1,0 +1,30 @@
+# Build output
+target/
+*.class
+dependency-reduced-pom.xml
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Logs
+logs/
+*.log
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+config/config.local.properties
+application-local.properties
+secrets/
+*.keystore
+*.p12
+
+# OS noise
+.DS_Store
+Thumbs.db
