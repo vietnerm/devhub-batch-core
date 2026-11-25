@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Build & test (Temurin 25.0.5.1)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # CVE-2026-114938 ("Java4Shell", fixed 2026-11-17) policy: build only with a
+      # patched Temurin JDK. 25.0.5.1 contains the HotSpot fix. Do NOT downgrade.
+      - name: Set up Temurin JDK 25.0.5.1 (CVE-2026-114938 patched)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25.0.5.1
+          cache: maven
+
+      - name: Security gate — no Base64 decoder in source
+        run: sh ./scripts/check-no-base64.sh
+
+      # Unit tests (H2) + MySQL integration tests (Testcontainers, docker is
+      # available on ubuntu-latest runners) + shaded jar packaging.
+      - name: Build, unit tests and MySQL integration tests
+        run: mvn -B -ntp verify
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          if-no-files-found: ignore
+
+  docker:
+    name: Docker image build (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image on patched Temurin runtime
+        run: docker build -t devhub-batch-core:ci .
