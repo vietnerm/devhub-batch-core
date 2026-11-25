@@ -16,11 +16,11 @@ jobs:
 
       # CVE-2026-114938 ("Java4Shell", fixed 2026-11-17) policy: build only with a
       # patched Temurin JDK. 25.0.5.1 contains the HotSpot fix. Do NOT downgrade.
-      - name: Set up Temurin JDK 25.0.5.1 (CVE-2026-114938 patched)
-        uses: actions/setup-java@v4
+      - name: Set up Eclipse Temurin 25 (patched CVE-2026-114938)
+        uses: actions/setup-java@v6   # ✅ Cập nhật lên v6
         with:
-          distribution: temurin
-          java-version: 25.0.5.1
+          distribution: 'temurin'
+          java-version: '25.0.5.1+2'  # ✅ Đúng định dạng của Adoptium
           cache: maven
 
       - name: Security gate — no Base64 decoder in source
