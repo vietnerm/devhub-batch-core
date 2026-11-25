@@ -63,7 +63,7 @@ class ScheduleValidatorTest {
 
     @Test
     void contradictoryDescriptionsAreRejected() {
-        assertFalse(ScheduleValidator.validate("ONCE", null, LocalDateTime.now(), null, null, "chay moi 2 phut").valid());
+        assertFalse(ScheduleValidator.validate("ONCE", null, LocalDateTime.now(), null, null, "chạy mỗi 2 phút").valid());
         assertFalse(ScheduleValidator.validate("RECURRING", "0 0 6 * * *", null, null, null, "one-time only").valid());
     }
 
