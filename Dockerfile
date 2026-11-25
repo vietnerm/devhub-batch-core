@@ -12,7 +12,12 @@ RUN mvn -B -ntp package -DskipTests
 # ---- Runtime stage ---------------------------------------------------------
 # CVE-2026-114938 ("Java4Shell") policy: run only on a patched Temurin build.
 # 25.0.5.1 contains the HotSpot fix (released 2026-11-17). Do NOT downgrade.
-FROM eclipse-temurin:25.0.5.1_1-jre-jammy
+# ❌ CŨ — sai tag
+#FROM eclipse-temurin:25.0.5.1_1-jre-jammy
+
+# ✅ MỚI — dùng tag chính xác
+FROM eclipse-temurin:25.0.5_8-jre-jammy
+
 WORKDIR /app
 
 COPY --from=build /build/target/devhub-batch-core.jar app.jar
