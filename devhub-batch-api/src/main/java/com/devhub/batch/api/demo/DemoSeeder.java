@@ -2,6 +2,7 @@ package com.devhub.batch.api.demo;
 
 import com.devhub.batch.core.model.ScheduledTask;
 import com.devhub.batch.core.repository.TaskRepository;
+import com.devhub.batch.core.support.Times;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -155,7 +156,7 @@ public class DemoSeeder implements ApplicationRunner {
 
         for (ScheduledTask task : live) {
             for (int i = 0; i < 150; i++) {
-                LocalDateTime executedAt = LocalDateTime.now().minusMinutes(rnd.nextLong(1, 1440));
+                LocalDateTime executedAt = Times.nowUtc().minusMinutes(rnd.nextLong(1, 1440));
                 String worker = workers[rnd.nextInt(workers.length)];
                 String status;
                 String error = null;
@@ -194,7 +195,7 @@ public class DemoSeeder implements ApplicationRunner {
     }
 
     private void seedFakeWorkers() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = Times.nowUtc();
         jdbc.update("""
                 INSERT INTO SYS_SCHEDULER_WORKERS
                 (WORKER_ID, OWNER_ID, OWNER_NAME, OWNER_EMAIL, MACHINE_NAME, HOSTNAME, PRIVATE_IP, PUBLIC_IP,

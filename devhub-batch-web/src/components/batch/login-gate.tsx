@@ -78,8 +78,7 @@ export function LoginGate({ onLogin }: { onLogin: (auth: BatchAuth) => void }) {
           <div className="mt-4 flex items-start gap-2 rounded-lg bg-stone-50 border border-stone-100 px-3 py-2">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-600" />
             <p className="text-xs text-muted-foreground">
-              Tài khoản demo: <span className="font-mono">admin / admin123</span> (ADMIN) ·{" "}
-              <span className="font-mono">viewer / viewer123</span> (VIEWER, chỉ xem)
+              Đăng nhập bằng tài khoản được cấu hình cho workspace.
             </p>
           </div>
         </CardContent>

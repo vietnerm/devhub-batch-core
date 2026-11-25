@@ -4,6 +4,7 @@ import com.devhub.batch.api.security.AuthService.BadCredentialsException;
 import com.devhub.batch.core.repository.JdbcTaskRepository.RepositoryException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -22,17 +23,17 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(ApiException.class)
-    public Map<String, Object> apiException(ApiException e) {
+    public ResponseEntity<Map<String, Object>> apiException(ApiException e) {
         return error(e.getStatus(), e.getMessage());
     }
 
     @ExceptionHandler(BadCredentialsException.class)
-    public Map<String, Object> badCredentials(BadCredentialsException e) {
+    public ResponseEntity<Map<String, Object>> badCredentials(BadCredentialsException e) {
         return error(401, e.getMessage());
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public Map<String, Object> accessDenied(AccessDeniedException e) {
+    public ResponseEntity<Map<String, Object>> accessDenied(AccessDeniedException e) {
         return error(403, "Yêu cầu vai trò ADMIN (ADMIN role required)");
     }
 
@@ -41,12 +42,12 @@ public class GlobalExceptionHandler {
             HttpMessageNotReadableException.class,
             HandlerMethodValidationException.class,
             HttpRequestMethodNotSupportedException.class})
-    public Map<String, Object> badRequest(Exception e) {
+    public ResponseEntity<Map<String, Object>> badRequest(Exception e) {
         return error(400, e.getMessage() == null ? "Invalid request" : e.getMessage());
     }
 
     @ExceptionHandler(RepositoryException.class)
-    public Map<String, Object> repository(RepositoryException e) {
+    public ResponseEntity<Map<String, Object>> repository(RepositoryException e) {
         String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
         if (message.contains("unique") || message.contains("duplicate") || message.contains("uk_task_name")) {
             return error(409, "TASK_NAME đã tồn tại (task name must be unique)");
@@ -56,15 +57,16 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public Map<String, Object> unexpected(Exception e) {
+    public ResponseEntity<Map<String, Object>> unexpected(Exception e) {
         log.error("event=api.unexpected_error", e);
         return error(500, "Internal error: " + e.getMessage());
     }
 
-    private static Map<String, Object> error(int status, String message) {
-        return Map.of(
+    private static ResponseEntity<Map<String, Object>> error(int status, String message) {
+        Map<String, Object> body = Map.of(
                 "status", status,
                 "message", message == null ? "" : message,
                 "timestamp", Instant.now().toString());
+        return ResponseEntity.status(status).body(body);
     }
 }
