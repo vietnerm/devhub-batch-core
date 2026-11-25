@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: devhub-batch-api
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:demo}
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: always
+
+server:
+  port: ${BATCH_API_PORT:8080}
+  error:
+    include-message: always
+
+batch:
+  # Scheduler engine (core) lifecycle inside the API JVM.
+  scheduler-enabled: ${BATCH_SCHEDULER_ENABLED:true}
+  migrate-on-startup: ${BATCH_MIGRATE_ON_STARTUP:true}
+  poll-interval-ms: ${BATCH_POLL_INTERVAL_MS:1000}
+  heartbeat-interval-ms: ${BATCH_HEARTBEAT_INTERVAL_MS:5000}
+  reconcile-interval-ms: ${BATCH_RECONCILE_INTERVAL_MS:5000}
+  stale-worker-threshold-ms: ${BATCH_STALE_WORKER_MS:30000}
+  misfire-grace-ms: ${BATCH_MISFIRE_GRACE_MS:30000}
+  log-retention-days: ${BATCH_LOG_RETENTION_DAYS:30}
+  cleanup-on-startup: ${BATCH_CLEANUP_ON_STARTUP:true}
+  thread-pool-size: ${BATCH_THREAD_POOL_SIZE:5}
+  db-pool-size: ${DB_POOL_SIZE:10}
+  leader-lock-name: ${BATCH_LEADER_LOCK_NAME:devhub-batch-core-leader}
+  worker-id: ${WORKER_ID:batch-api-node}
+  worker-owner-id: ${WORKER_OWNER_ID:devhub}
+  worker-owner-name: ${WORKER_OWNER_NAME:DevHub Batch}
+  worker-owner-email: ${WORKER_OWNER_EMAIL:devops@devhub.local}
+  worker-environment: ${WORKER_ENVIRONMENT:default}
+  worker-location: ${WORKER_LOCATION:api-node}
+  worker-app-version: ${WORKER_APP_VERSION:devhub-batch-api-2.0.0}
+
+  api:
+    # HMAC key for access tokens: 64 hex chars = 32 bytes. Override via env in production.
+    jwt-secret-hex: ${BATCH_API_JWT_SECRET_HEX:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+    token-ttl-minutes: ${BATCH_API_TOKEN_TTL_MINUTES:480}
+    # Demo accounts. In production set BATCH_API_ADMIN_PASSWORD / BATCH_API_VIEWER_PASSWORD,
+    # or switch to password-hash (BCrypt) entries.
+    users:
+      - username: admin
+        password: ${BATCH_API_ADMIN_PASSWORD:admin123}
+        role: ADMIN
+      - username: viewer
+        password: ${BATCH_API_VIEWER_PASSWORD:viewer123}
+        role: VIEWER
+  cors:
+    allowed-origins: ${BATCH_API_CORS_ORIGINS:*}

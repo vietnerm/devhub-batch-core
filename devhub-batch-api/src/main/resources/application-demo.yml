@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    # H2 in MySQL compatibility mode — same DDL dialect as core unit tests.
+    # Swap to application-mysql.yml (SPRING_PROFILES_ACTIVE=mysql) for real deployments.
+    url: 'jdbc:h2:file:./data/batch-demo;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE'
+    username: ${DB_USERNAME:sa}
+    password: ${BATCH_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:sql/h2-schema.sql
+
+batch:
+  # V20260815 migration SQL uses MySQL PREPARE/EXECUTE — on H2 the schema
+  # comes from sql/h2-schema.sql instead, so core migration is disabled.
+  migrate-on-startup: false

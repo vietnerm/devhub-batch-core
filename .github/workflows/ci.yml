@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Build & test (Temurin 25.0.5.1)
+  backend:
+    name: Backend tests (Temurin 25.0.5.1)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -37,16 +37,55 @@ jobs:
         with:
           name: test-reports
           path: |
-            target/surefire-reports/
-            target/failsafe-reports/
+            '**/target/surefire-reports/'
+            '**/target/failsafe-reports/'
           if-no-files-found: ignore
 
-  docker:
-    name: Docker image build (no push)
+  web:
+    name: Web checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build image on patched Temurin runtime
-        run: docker build -t devhub-batch-core:ci .
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: devhub-batch-web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: devhub-batch-web
+
+      - name: Lint, type-check and build
+        run: |
+          npm run lint
+          ./node_modules/.bin/tsc --noEmit -p tsconfig.json
+          npm run build
+        working-directory: devhub-batch-web
+
+  docker:
+    name: Docker image build (no push)
+    needs: [backend, web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Eclipse Temurin 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25.0.5.1+2'
+          cache: maven
+
+      - name: Package API
+        run: mvn -B -ntp -DskipTests package
+
+      - name: Build API image
+        run: docker build -t devhub-batch-api:ci -f devhub-batch-api/Dockerfile devhub-batch-api
+
+      - name: Build web image
+        run: docker build -t devhub-batch-web:ci devhub-batch-web

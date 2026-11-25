@@ -1,0 +1,47 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devhub_root_pw}
+      MYSQL_DATABASE: devhub_rbac
+      TZ: Asia/Ho_Chi_Minh
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ./devhub-batch-api
+      dockerfile: Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: mysql
+      DB_URL: jdbc:mysql://mysql:3306/devhub_rbac
+      DB_USERNAME: root
+      BATCH_DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devhub_root_pw}
+      BATCH_API_ADMIN_PASSWORD: ${BATCH_API_ADMIN_PASSWORD:-admin123}
+      BATCH_API_VIEWER_PASSWORD: ${BATCH_API_VIEWER_PASSWORD:-viewer123}
+      BATCH_API_JWT_SECRET_HEX: ${BATCH_API_JWT_SECRET_HEX:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      WORKER_ID: batch-api-node
+      TZ: Asia/Ho_Chi_Minh
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: ./devhub-batch-web
+      args:
+        NEXT_PUBLIC_BATCH_API_BASE: ${NEXT_PUBLIC_BATCH_API_BASE:-http://localhost:8080}
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  mysql-data:

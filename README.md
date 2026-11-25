@@ -1,166 +1,94 @@
-# DevHub Batch Core
+# DevHub Batch Platform
 
-Standalone, distributed batch scheduler for DevHub — a clean rewrite of the
-`devhub-rbac-batch` core (scheduler engine only). Pure JDBC, no Spring runtime,
-Java 21+, MySQL 8.
-
-**Scope note:** this repository contains the **core scheduler only**. Business
-batches (`zz/*`, `go/*`) stay in the original project and are out of scope for
-now; they keep running through the same `Runner` contract.
-
-[![CI](https://github.com/vietnerm/devhub-batch-core/actions/workflows/ci.yml/badge.svg)](https://github.com/vietnerm/devhub-batch-core/actions/workflows/ci.yml)
-
-## Why a rewrite
-
-The 1.x scheduler worked, but code review found structural defects that were
-safer to rewrite than to patch:
-
-| # | Defect in devhub-rbac-batch 1.x | Fix in devhub-batch-core |
-|---|---|---|
-| Y1 | `initFromDatabase()` unconditionally rewrote every `RUNNING` task to `TIMEOUT` at startup, killing runs that other live workers were executing | `TaskRecovery.recoverTimedOutTasks` only rewrites a run when its own claim is stale (`CLAIMED_AT` older than the task's `TIMEOUT_SECONDS`) |
-| Y2 | `CronCalculator.nextExecution()` used `ZoneId.systemDefault()`, silently ignoring the task's `TIMEZONE` column | Every cron calculation runs on the task timezone wall clock (`CronCalculator.zoneOf`), zones are validated on save |
-| Y3 | `calculateDelay()` clamped with `Math.max(0, ...)`, `MISFIRE_POLICY` was stored but never enforced | `SchedulePlanner.misfireAdvance` + leader loop enforce `FIRE_NOW` / `SKIP_TO_NEXT` (legacy values `FIRE_ONCE`, `SKIP`, `RESCHEDULE_NEXT` are normalized) |
-| Y5 | The reconcile loop rescheduled whenever `abs(requested - owned) > 5000 ms`, a drift condition that could re-fire in a loop | No in-memory futures at all: the database (`NEXT_RUN_AT`) is the single source of truth; `SchedulePlanner.afterRun` is strictly increasing |
-| Y6 | CLI `run` started the engine, slept 1 second, then shut down; `pause`/`list`/`logs` also booted the full engine | DB-only commands never start the engine; `run` executes synchronously and prints the real outcome; daemon blocks on a latch until SIGINT |
-| — | `batch.cleanup-on-startup` config was dead code | drives hourly log-retention purge (`batch.log-retention-days`) |
-| — | Worker startup called `api.ipify.org` / `ifconfig.me` to detect the public IP | removed; public IP comes only from explicit config |
-| — | Claim state could not be trusted without worker heartbeats | worker registry heartbeat (5 s) + stale marking + `GET_LOCK` leader election for reconcile |
-
-## CVE-2026-114938 ("Java4Shell") policy
-
-CVE-2026-114938 is a memory-corruption/RCE vulnerability in the HotSpot
-intrinsics of `java.util.Base64` (affects Java 17.0.6+/21/25/27 on x86-64
-CPUs with AVX-512 VBMI; fixed Temurin builds 17.0.21.1 / 21.0.13.1 /
-25.0.5.1 / 27.0.1.1, released 2026-11-17).
-
-This project is hardened on two layers:
-
-1. **Never call the Base64 decoder.** All binary-to-text output (AES-256-GCM
-   ciphertexts, master keys) uses `com.devhub.batch.core.crypto.HexCodec`.
-   CI fails if the banned decoder is referenced (`scripts/check-no-base64.sh`).
-2. **Only patched JDKs.** CI pins Temurin `25.0.5.1`; the Dockerfile runs
-   `eclipse-temurin:25.0.5.1_1-jre` and also disables the decoder intrinsics
-   (`-XX:-UseBASE64Intrinsics` behind `IgnoreUnrecognizedVMOptions`) as
-   defense in depth. Encrypted config values use `enc:<hex>` + the
-   `BATCH_MASTER_KEY` env var (64 hex chars = 32 bytes).
-
-## Architecture
+Monorepo gồm 3 lớp độc lập cho hệ thống batch scheduler:
 
 ```
-                 ┌────────────────────────── MySQL 8 ──────────────────────────┐
-                 │ SYS_SCHEDULED_TASKS   SYS_TASK_EXECUTION_LOGS               │
-                 │ SYS_SCHEDULER_WORKERS SYS_BATCH_MIGRATIONS                  │
-                 └────────▲───────────────────▲───────────────────▲────────────┘
-                          │ poll/claim        │ heartbeat         │ reconcile (leader)
-              ┌───────────┴───────┐   ┌───────┴────────┐   ┌──────┴──────────┐
-              │ worker A (daemon) │   │ worker B       │   │ worker C        │
-              │ dispatch 1s       │   │ (same image)   │   │ GET_LOCK leader │
-              │ pool size N       │   │                │   │ recovery/misfire│
-              └───────────┬───────┘   └───────┬────────┘   └──────┬──────────┘
-                          │ claim (atomic UPDATE)                 │
-                          ▼                                       │
-                    TaskJob: claim → RUNNING → Runner.execute() → log → next run
+devhub-batch/
+├── devhub-batch-core/   Engine scheduler thuần JDBC (Scheduler, TaskJob,
+│                        Repository, Misfire/Planner, AES-GCM + HexCodec).
+│                        Không dính HTTP/framework — chạy standalone CLI hoặc thư viện.
+├── devhub-batch-api/    Spring Boot 3 facade: REST + WebSocket, JWT (hex-HMAC),
+│                        read model JDBC, scheduler chạy embedded.
+├── devhub-batch-web/    Next.js 16 + shadcn/ui Ops Console: dashboard, tasks,
+│                        log viewer realtime, workers, tạo task với cron preview.
+├── scripts/             CI gates (no-Base64 policy CVE-2026-114938).
+└── docker-compose.yml   MySQL 8 + API + Web, một lệnh dựng full stack.
 ```
 
-- **Dispatch loop** (every `batch.poll-interval-ms`, default 1 s): finds
-  `SCHEDULED` tasks with `NEXT_RUN_AT <= now`, submits claims up to the free
-  pool slots. The claim is one conditional `UPDATE` — exactly one worker wins.
-- **Heartbeat loop** (5 s): upserts the worker registry row with the current
-  task, so the web UI (`devhub-rbac-web` kanban) sees live state.
-- **Leader loop** (5 s, one node wins `GET_LOCK('devhub-batch-core-leader')`):
-  marks stale workers, recovers timed-out claims (Y1), advances overdue tasks
-  per misfire policy (Y3), purges old execution logs by retention.
+## Luồng dữ liệu
 
-## Quick start
+```
+Web (Next.js)  ──REST/WS──▶  API (Spring Boot 3)  ──TaskRepository──▶  Core engine
+                                   │                                    │
+                                   └──────── JdbcTemplate read ─────────┤
+                                                                        ▼
+                                                            MySQL 8 / H2 (demo)
+                                              SYS_SCHEDULED_TASKS · SYS_TASK_EXECUTION_LOGS
+                                              SYS_SCHEDULER_WORKERS · SYS_BATCH_MIGRATIONS
+```
+
+Nguyên tắc: **ghi** phải đi qua `TaskRepository` của core (validation cron,
+NEXT_RUN_AT planning Y5, claim atomic Y1); API chỉ thêm read model (phân trang,
+thống kê) và KHÔNG BAO GIỜ issue UPDATE riêng vào SYS_ tables.
+
+## Bảo mật
+
+- Token đăng nhập: `v1.<hex(payload)>.<hex(HMAC-SHA256)>` — hex 100%, đúng chính
+  sách cấm JDK Base64 decoder của CVE-2026-114938 (`scripts/check-no-base64.sh`
+  chặn ở CI). Secrets cấu hình dạng hex/`enc:<hex>`, không Base64.
+- 2 vai trò: **ADMIN** (tạo/sửa/xóa/pause/resume/trigger) và **VIEWER** (chỉ xem).
+- Dockerfile API dùng `eclipse-temurin:25.0.5.1_2-jre` + `-XX:-UseBASE64Intrinsics`.
+
+## Chạy demo nhanh (không cần MySQL)
 
 ```bash
-mvn -B verify                 # unit tests (H2) + MySQL ITs (Testcontainers)
-mvn -B package                # shaded jar: target/devhub-batch-core.jar
-
-# 1. Schema
-java -jar target/devhub-batch-core.jar migrate
-
-# 2. Register a task (6-field Spring cron: sec min hour dom mon dow)
-java -jar target/devhub-batch-core.jar add Demo com.example.DemoBatch "0 */2 * * * *" 1 "runs every 2 minutes"
-
-# 3. Run the daemon
-java -jar target/devhub-batch-core.jar daemon
+mvn -B -ntp -pl devhub-batch-api -am package -DskipTests
+java -Dslf4j.provider=ch.qos.logback.classic.spi.LogbackServiceProvider \
+     -jar devhub-batch-api/target/devhub-batch-api.jar --spring.profiles.active=demo
+# API: http://localhost:8080 — H2 file ./data/batch-demo, seed 13 task + ~600 log
+# Tài khoản: admin/admin123, viewer/viewer123
 ```
 
-Configuration priority: `ENV var` > `-Dconfig.file=/path` > classpath
-`config.properties` > defaults. Secrets are never stored in the file:
+Web: xem `devhub-batch-web/README.md` (`bun install && bun run dev`).
+
+## Chạy production stack
 
 ```bash
-BATCH_MASTER_KEY=$(openssl rand -hex 32)           # keep this safe
-echo -n 'real-db-password' | java -jar app.jar encrypt
-# -> enc:4226e2db...   paste into db.password (or keep ${BATCH_DB_PASSWORD})
+mvn -B -ntp -DskipTests package
+export MYSQL_ROOT_PASSWORD=... BATCH_API_JWT_SECRET_HEX=<64 hex> ...
+docker compose up -d --build
+# web: http://localhost:3000 · api: http://localhost:8080
 ```
 
-## CLI
+## API v1
 
-| Command | Starts engine? | Description |
+| Method | Path | Vai trò |
 |---|---|---|
-| `daemon` | yes | run the scheduler until SIGINT/SIGTERM |
-| `migrate` | no | apply versioned SQL migrations (`db/migration/*.sql`) |
-| `list` / `status` / `logs <id>` | no | inspect tasks and history |
-| `add` / `add-once` | no | register RECURRING / ONCE tasks (validated before insert) |
-| `run <id>` | no | execute one attempt synchronously and print the outcome (fix Y6) |
-| `pause` / `resume` / `stop` / `delete` | no | lifecycle control via DB |
-| `validate-cron` / `validate-schedule` | no | offline validation |
-| `encrypt` | no | stdin secret → `enc:<hex>` (AES-256-GCM, hex only) |
+| POST | `/api/auth/login` | public |
+| GET | `/api/tasks?page&size&status&q&sort&dir` | authenticated |
+| GET | `/api/tasks/{id}` | authenticated |
+| POST | `/api/tasks` | ADMIN |
+| PUT | `/api/tasks/{id}` | ADMIN |
+| POST | `/api/tasks/{id}/pause` · `/resume` · `/trigger` | ADMIN |
+| DELETE | `/api/tasks/{id}` | ADMIN |
+| GET | `/api/workers` | authenticated |
+| GET | `/api/stats/summary` · `/api/stats/timeline?hours` · `/api/stats/latest-failure` | authenticated |
+| POST | `/api/cron/check` | authenticated |
+| WS | `/ws/events?token=...` (event: `task`, `log`, `workers`, `task_removed`) | authenticated |
 
-## Database
+## CI
 
-Same table names, columns and status vocabulary as 1.x, so `devhub-rbac-web`
-(ZZA0_1300 scheduler screens) keeps working unchanged:
-`SCHEDULED / RUNNING / PAUSED / STOPPED / ERROR / TIMEOUT / COMPLETED`.
+`.github/workflows/ci.yml`: Temurin **25.0.5.1** (patched JDK) → no-Base64 gate →
+`mvn verify` (unit + Testcontainers MySQL IT) → docker build API + Web.
 
-Migration `V20260815__batch_core_schema.sql` is idempotent: fresh installs
-create the full schema; existing 1.x databases are upgraded in place via
-guarded `ALTER`s. Applied versions are tracked in `SYS_BATCH_MIGRATIONS`.
+## Ghi chú kỹ thuật
 
-## CI/CD testing (GitHub Actions)
-
-`.github/workflows/ci.yml` runs on every push/PR to `main`:
-
-1. **JDK gate** — Temurin `25.0.5.1` (CVE-2026-114938 patched, released
-   2026-11-17). Downgrading the JDK is a policy violation, not an option.
-2. **Security gate** — `scripts/check-no-base64.sh` fails the build when the
-   banned decoder appears anywhere in `src/` or `config/`.
-3. **Tests** — `mvn verify`: 65 unit tests (H2, covering claim atomicity,
-   timezone-aware cron, misfire policies, recovery rules, crypto roundtrips)
-   plus Testcontainers MySQL integration tests (real migrations + end-to-end
-   `TaskJob` execution + concurrent claim race).
-4. **Docker** — builds the image on the patched runtime (no push; add your
-   registry credentials to publish).
-
-## Project layout
-
-```
-src/main/java/com/devhub/batch/core/
-├── Scheduler.java            # poll/claim engine (dispatch, heartbeat, leader loops)
-├── SchedulerBootstrap.java   # singleton entry point + leader elector selection
-├── TaskJob.java              # one execution attempt (claim → run → log → next)
-├── TaskRecovery.java         # Y1-safe recovery + Y3 misfire enforcement
-├── Runner.java               # abstract batch base (1.x plugin contract kept)
-├── cli/                      # App, Cli, DataSourceFactory
-├── config/BatchConfig.java   # layered config, ${VAR} interpolation, enc:<hex> secrets
-├── cron/CronCalculator.java  # cron-utils SPRING53, zone-aware (fix Y2)
-├── crypto/                   # HexCodec + AesGcm (no Base64 anywhere)
-├── migrate/DatabaseMigrator.java
-├── misfire/MisfirePolicy.java
-├── model/                    # ScheduledTask, TaskExecutionLog, WorkerInfo
-├── repository/               # TaskRepository + JdbcTaskRepository (atomic claim)
-├── schedule/                 # ScheduleValidator, SchedulePlanner
-└── worker/                   # LeaderElector (MySQL GET_LOCK / always-leader)
-```
-
-## Tổng quan (Tiếng Việt)
-
-Đây là bản viết lại phần **core scheduler** của `devhub-rbac-batch` (không gồm
-các batch nghiệp vụ `zz/`, `go/`). Đã sửa toàn bộ lỗi Y1–Y6 tìm thấy khi review:
-không còn tự đánh dấu `RUNNING→TIMEOUT` khi khởi động, cron tôn trọng cột
-`TIMEZONE`, `MISFIRE_POLICY` thực sự có hiệu lực, bỏ vòng drift-check gây lặp,
-CLI chạy đồng bộ đúng nghĩa. Bảo mật: **cấm hoàn toàn Base64** (policy
-CVE-2026-114938) — mọi mã hóa dùng hex + AES-256-GCM; CI chỉ build trên JDK
-Temurin đã vá (25.0.5.1) và tự chặn nếu source xuất hiện lại Base64.
+- Core jar là shaded CLI jar nên mang theo `slf4j-simple`; API ép provider Logback
+  bằng `-Dslf4j.provider=ch.qos.logback.classic.spi.LogbackServiceProvider`.
+- Demo profile dùng H2 MODE=MySQL với `sql/h2-schema.sql` (schema MySQL migration
+  V20260815 dùng PREPARE/EXECUTE chỉ chạy được trên MySQL thật).
+- Realtime không cắm hook vào core: poller tail `SYS_TASK_EXECUTION_LOGS` theo ID
+  tăng dần + diff fingerprint 2 bảng còn lại (bảng nhỏ; production lớn nên thêm
+  version column/trigger).
+- Timestamps lưu wall-clock Asia/Ho_Chi_Minh; API set `user.timezone` mặc định,
+  container đặt `TZ` tương ứng.

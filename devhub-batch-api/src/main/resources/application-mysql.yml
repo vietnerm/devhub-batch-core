@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/devhub_rbac}
+    username: ${DB_USERNAME:root}
+    password: ${BATCH_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+  sql:
+    init:
+      mode: never
+
+batch:
+  # MySQL deployments: core DatabaseMigrator applies V20260815__batch_core_schema.sql.
+  migrate-on-startup: ${BATCH_MIGRATE_ON_STARTUP:true}
